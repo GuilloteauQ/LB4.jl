@@ -44,6 +44,7 @@ end
 @enum Schemes begin
   static = 1
   dynamic = 2
+  gss
 end
 
 function get_chunk_dynamic(j::Int64, first_index::Int64, _max_len::Int64)::Tuple{Int, Int}
@@ -54,11 +55,21 @@ function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64)::Tuple{I
   (floor(first_index + (j - 1) * max_len / Threads.threadpoolsize()), floor(first_index + j * max_len / Threads.threadpoolsize() - 1))
 end
 
+function get_chunk_gss(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
+  p = Threads.threadpoolsize()
+  offset = max_len - max_len * ((p-1)/p)^(j-1)
+  k = (max_len / p) * ((p-1)/p)^(j-1)
+  (floor(first_index + offset), floor(first_index + offset + k - 1))
+end
+
 function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
+  p = Threads.threadpoolsize()
   if sched == static::Schemes
-    (i::Int64) -> get_chunk_static(i, first_index, max_len)
+    ((i::Int64) -> get_chunk_static(i, first_index, max_len), p)
   elseif sched == dynamic::Schemes
-    (i::Int64) -> get_chunk_dynamic(i, first_index, max_len)
+    ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len), max_len)
+  elseif sched == gss::Schemes
+    ((i::Int64) -> get_chunk_gss(i, first_index, max_len), ceil(log(p / max_len) / log((p-1)/p) + 1))
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
@@ -80,32 +91,29 @@ macro mythreads(args...)
     quote
       local thread_f
       let range = $(esc(range))
-        let sched = $(sched)
         lenr = length(range)
-        p = Threads.threadpoolsize()
-        len = lenr / (2 * p)
-        max_chunks = p;
-
-        chunk_f = get_chunk(firstindex(range), lenr, static::Schemes)
-
+        fi = firstindex(range)
+        chunk_f, max_chunks = get_chunk(fi, lenr, static::Schemes)
         queue_index = Threads.Atomic{Int}(1)
 
         function thread_f()
-          # TODO
-          if queue_index[] <= max_chunks
-
-            start_iter, end_iter = chunk_f(Threads.atomic_add!(queue_index, 1))
-
+          while true
+            index = Threads.atomic_add!(queue_index, 1)
+            if index > max_chunks
+              return
+            end
+            start_iter, end_iter = chunk_f(index)
+            end_iter = min(end_iter, fi + lenr)
+            if end_iter < start_iter
+              println("oops")
+              return
+            end
             #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "]")
-
             for i in start_iter:end_iter
               local $(esc(index_variable)) = @inbounds i
               $(esc(body))
             end
-
-            thread_f()
           end
-        end
         end
       end
       threading_run(thread_f, true)
@@ -125,7 +133,7 @@ end
 
 
 
-n = 2 * 12 * 1000000
+n = 3 * 13 * 1000000
 for i in 1:10 
   pi_approx = @time compute_pi(n)
   println(pi_approx)
