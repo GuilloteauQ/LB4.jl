@@ -45,6 +45,7 @@ end
   static = 1
   dynamic = 2
   gss
+  tss
 end
 
 function get_chunk_dynamic(j::Int64, first_index::Int64, _max_len::Int64)::Tuple{Int, Int}
@@ -55,11 +56,17 @@ function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64)::Tuple{I
   (floor(first_index + (j - 1) * max_len / Threads.threadpoolsize()), floor(first_index + j * max_len / Threads.threadpoolsize() - 1))
 end
 
-function get_chunk_gss(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
-  p = Threads.threadpoolsize()
+function get_chunk_gss(j::Int64, first_index::Int64, max_len::Int64, p::Int64)::Tuple{Int, Int}
   offset = max_len - max_len * ((p-1)/p)^(j-1)
   k = (max_len / p) * ((p-1)/p)^(j-1)
   (floor(first_index + offset), floor(first_index + offset + k - 1))
+end
+
+function get_chunk_tss(j::Int64, first_index::Int64, max_len::Int64, f::Int64, l::Int64, S::Int64, delta::Int64)::Tuple{Int, Int}
+  i_start = first_index + floor(((j - 1) * (2 * f - (j - 2) * delta)) / 2)# + 1
+  i_end   = first_index + floor((j * (2 * f - (j - 1) * delta)) / 2)
+
+  (i_start, (i_end - 1 <= max_len) ? i_end - 1 : max_len)
 end
 
 function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
@@ -69,7 +76,13 @@ function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
   elseif sched == dynamic::Schemes
     ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len), max_len)
   elseif sched == gss::Schemes
-    ((i::Int64) -> get_chunk_gss(i, first_index, max_len), ceil(log(p / max_len) / log((p-1)/p) + 1))
+    ((i::Int64) -> get_chunk_gss(i, first_index, max_len, p), ceil(log(p / max_len) / log((p-1)/p) + 1))
+  elseif sched == tss::Schemes
+    f = ceil(Int64, max_len / (2 * Threads.threadpoolsize()))
+    l = 1
+    S = ceil(Int64, 2 * max_len / (f + l))
+    delta = floor(Int64, (f - l) / (S - 1))
+    ((i::Int64) -> get_chunk_tss(i, first_index, max_len, f, l, S, delta), S)
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
@@ -93,7 +106,7 @@ macro mythreads(args...)
       let range = $(esc(range))
         lenr = length(range)
         fi = firstindex(range)
-        chunk_f, max_chunks = get_chunk(fi, lenr, static::Schemes)
+        chunk_f, max_chunks = get_chunk(fi, lenr, tss::Schemes)
         queue_index = Threads.Atomic{Int}(1)
 
         function thread_f()
@@ -133,7 +146,7 @@ end
 
 
 
-n = 3 * 13 * 1000000
+n = 4 * 1000000
 for i in 1:10 
   pi_approx = @time compute_pi(n)
   println(pi_approx)
