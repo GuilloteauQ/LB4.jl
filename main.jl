@@ -48,8 +48,8 @@ end
   tss
 end
 
-function get_chunk_dynamic(j::Int64, first_index::Int64, _max_len::Int64)::Tuple{Int, Int}
-  (first_index + (j - 1), first_index + j)
+function get_chunk_dynamic(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
+  (first_index + (j - 1), first_index + ((j < max_len) ? j : max_len))
 end
 
 function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
@@ -90,23 +90,19 @@ function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
 end
 
 macro mythreads(args...)
-    println(args)
     sched, loop = args
-    println(sched)
-    sched_v = sched.value
     iterator = loop.args[1]
     body = loop.args[2]
     index_variable = iterator.args[1]
     range = iterator.args[2]
-
-    println(index_variable)
-
     quote
       local thread_f
       let range = $(esc(range))
+        let sched_v = $(esc(sched))
         lenr = length(range)
         fi = firstindex(range)
-        chunk_f, max_chunks = get_chunk(fi, lenr, tss::Schemes)
+        # chunk_f, max_chunks = get_chunk(fi, lenr, gss::Schemes)
+        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v)
         queue_index = Threads.Atomic{Int}(1)
 
         function thread_f()
@@ -118,7 +114,6 @@ macro mythreads(args...)
             start_iter, end_iter = chunk_f(index)
             end_iter = min(end_iter, fi + lenr)
             if end_iter < start_iter
-              println("oops")
               return
             end
             #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "]")
@@ -129,30 +124,92 @@ macro mythreads(args...)
           end
         end
       end
+      end
       threading_run(thread_f, true)
     end
 end
 
 
-function par_compute_pi(nb_iteration)::Float64
-  counts = Array{Bool}(undef, nb_iteration)
-  # @Threads.threads :static for i in 1:nb_iteration
-  @mythreads :dynamic for i in 1:nb_iteration
-    (x, y) = random_point()
-    counts[i] = (x * x + y * y < 1)
+#function par_compute_pi(nb_iteration)::Float64
+#  counts = Array{Bool}(undef, nb_iteration)
+#  # @Threads.threads :static for i in 1:nb_iteration
+#  @mythreads :dynamic for i in 1:nb_iteration
+#    (x, y) = random_point()
+#    counts[i] = (x * x + y * y < 1)
+#  end
+#  4 * sum(counts) / nb_iteration
+#end
+
+
+
+#n = 41 * 1000000
+#for i in 1:10 
+#  pi_approx = @time compute_pi(n)
+#  #println(pi_approx)
+#end
+#
+#for i in 1:10
+#  pi_approx_par =  @time par_compute_pi(n)
+#  #println(pi_approx_par)
+#end
+
+function diverges(c::Complex, nb_iterations::Int64, epsilon::Float64)::Bool
+  z = 0 + im * 0
+  i = 0
+  while abs(z) < epsilon && i < nb_iterations
+    z = z * z + c
+    i = i + 1
   end
-  4 * sum(counts) / nb_iteration
+  i < nb_iterations
 end
 
+function mandelbrot()
+  xmin = -4.0
+  xmax =  4.0
+  ymin = -1.0
+  ymax =  1.0
+  delta = 0.001
 
 
-n = 4 * 1000000
-for i in 1:10 
-  pi_approx = @time compute_pi(n)
-  println(pi_approx)
+  nb_rows = floor(Int64, (ymax - ymin) / delta)
+  nb_cols = floor(Int64, (xmax - xmin) / delta)
+
+  data = Matrix{Bool}(undef, nb_rows, nb_cols)
+
+  for x in 1:nb_cols
+    for y in 1:nb_rows
+      c = ((xmax - xmin) * x / nb_cols + xmin) + im * ((ymax - ymin) * y / nb_rows + ymin)
+      data[y, x] = diverges(c, 10000, 100.0)
+    end
+  end
+  data
 end
 
-for i in 1:10
-  pi_approx_par =  @time par_compute_pi(n)
-  println(pi_approx_par)
+function mandelbrot_par(scheme::Schemes)
+  xmin = -4.0
+  xmax =  4.0
+  ymin = -1.0
+  ymax =  1.0
+  delta = 0.001
+
+
+  nb_rows = floor(Int64, (ymax - ymin) / delta)
+  nb_cols = floor(Int64, (xmax - xmin) / delta)
+
+  data = Matrix{Bool}(undef, nb_rows, nb_cols)
+
+  @mythreads scheme for x in 1:nb_cols
+    for y in 1:nb_rows
+      c = ((xmax - xmin) * x / nb_cols + xmin) + im * ((ymax - ymin) * y / nb_rows + ymin)
+      data[y, x] = diverges(c, 10000, 100.0)
+    end
+  end
+  data
 end
+
+#@time mandelbrot()
+#@time mandelbrot_par(static::Schemes)
+# @time mandelbrot_par(gss::Schemes)
+# @time mandelbrot_par(tss::Schemes)
+@time mandelbrot_par(dynamic::Schemes)
+
