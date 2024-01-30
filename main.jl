@@ -46,14 +46,15 @@ end
   dynamic = 2
   gss
   tss
+  fac2
 end
 
 function get_chunk_dynamic(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
-  (first_index + (j - 1), first_index + ((j < max_len) ? j : max_len))
+  (first_index + (j - 1), first_index + (j - 1))
 end
 
-function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
-  (floor(first_index + (j - 1) * max_len / Threads.threadpoolsize()), floor(first_index + j * max_len / Threads.threadpoolsize() - 1))
+function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64, block_size::Int64)::Tuple{Int, Int}
+  (first_index + (j - 1) * block_size, first_index + min(max_len, j * block_size - 1))
 end
 
 function get_chunk_gss(j::Int64, first_index::Int64, max_len::Int64, p::Int64)::Tuple{Int, Int}
@@ -69,10 +70,20 @@ function get_chunk_tss(j::Int64, first_index::Int64, max_len::Int64, f::Int64, l
   (i_start, (i_end - 1 <= max_len) ? i_end - 1 : max_len)
 end
 
+function get_chunk_fac2(j::Int64, first_index::Int64, max_len::Int64, p::Int64)::Tuple{Int, Int}
+  round = (j - 1) ÷ p
+  block_size = ceil(Int64, (0.5)^(round + 1) * max_len / p)
+  start = first_index + sum(p * (ceil(Int64, (0.5)^(i + 1) * max_len / p)) for i in 0:(round - 1); init=0) + ((j - 1) % p) * block_size
+
+  #println("Thread id: ", Threads.threadid(), ", round: ", round, ", block size: ", block_size, ", start: ", start)
+
+  (start, start + block_size - 1)
+end
+
 function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
   p = Threads.threadpoolsize()
   if sched == static::Schemes
-    ((i::Int64) -> get_chunk_static(i, first_index, max_len), p)
+    ((i::Int64) -> get_chunk_static(i, first_index, max_len, div(max_len, p)), p)
   elseif sched == dynamic::Schemes
     ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len), max_len)
   elseif sched == gss::Schemes
@@ -83,6 +94,8 @@ function get_chunk(first_index::Int64, max_len::Int64, sched::Schemes)
     S = ceil(Int64, 2 * max_len / (f + l))
     delta = floor(Int64, (f - l) / (S - 1))
     ((i::Int64) -> get_chunk_tss(i, first_index, max_len, f, l, S, delta), S)
+  elseif sched == fac2::Schemes
+    ((i::Int64) -> get_chunk_fac2(i, first_index, max_len, p), max_len)
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
@@ -112,11 +125,12 @@ macro mythreads(args...)
               return
             end
             start_iter, end_iter = chunk_f(index)
-            end_iter = min(end_iter, fi + lenr)
-            if end_iter < start_iter
+            #end_iter = min(end_iter, fi + lenr)
+            if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
+              #println("oops")
               return
             end
-            #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "]")
+            #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "], ", fi + lenr)
             for i in start_iter:end_iter
               local $(esc(index_variable)) = @inbounds i
               $(esc(body))
@@ -142,7 +156,7 @@ end
 
 
 
-#n = 41 * 1000000
+n = 41 * 1000000
 #for i in 1:10 
 #  pi_approx = @time compute_pi(n)
 #  #println(pi_approx)
@@ -207,9 +221,39 @@ function mandelbrot_par(scheme::Schemes)
   data
 end
 
-#@time mandelbrot()
-#@time mandelbrot_par(static::Schemes)
-# @time mandelbrot_par(gss::Schemes)
-# @time mandelbrot_par(tss::Schemes)
+println("Mandelbrot --------------------")
+print("Static ")
+@time mandelbrot_par(static::Schemes)
+print("GSS ")
+@time mandelbrot_par(gss::Schemes)
+print("TSS ")
+@time mandelbrot_par(tss::Schemes)
+print("Dynamic ")
 @time mandelbrot_par(dynamic::Schemes)
+print("FAC2 ")
+@time mandelbrot_par(fac2::Schemes)
 
+
+
+println("PI --------------------")
+
+function par_compute_pi(nb_iteration, scheme::Schemes)::Float64
+  counts = Array{Bool}(undef, nb_iteration)
+  @mythreads scheme for i in 1:nb_iteration
+    (x, y) = random_point()
+    counts[i] = (x * x + y * y < 1)
+  end
+  4 * sum(counts) / nb_iteration
+end
+
+n = 10000000
+print("Static ")
+@time par_compute_pi(n, static::Schemes)
+print("GSS ")
+@time par_compute_pi(n, gss::Schemes)
+print("TSS ")
+@time par_compute_pi(n, tss::Schemes)
+print("Dynamic ")
+@time par_compute_pi(n, dynamic::Schemes)
+print("FAC2 ")
+@time par_compute_pi(n, fac2::Schemes)
