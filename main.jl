@@ -94,7 +94,7 @@ function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol)
   end
 end
 
-macro mythreads(args...)
+macro lbthreads(args...)
     sched, loop = args
     iterator = loop.args[1]
     body = loop.args[2]

@@ -45,7 +45,7 @@ function mandelbrot_par(scheme::Symbol)
 
   data = Matrix{Bool}(undef, nb_rows, nb_cols)
 
-  @mythreads scheme for x in 1:nb_cols
+  @lbthreads scheme for x in 1:nb_cols
     for y in 1:nb_rows
       c = ((xmax - xmin) * x / nb_cols + xmin) + im * ((ymax - ymin) * y / nb_rows + ymin)
       data[y, x] = diverges(c, 10000, 100.0)
