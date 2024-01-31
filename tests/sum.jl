@@ -1,5 +1,9 @@
-include("../main.jl")
+include("../src/LoadBalancing.jl")
 using BenchmarkTools
+
+function random_point()
+  (rand(), rand())
+end
 
 function par_compute_pi(nb_iteration, scheme::Symbol)::Float64
   counts = Array{Bool}(undef, nb_iteration)

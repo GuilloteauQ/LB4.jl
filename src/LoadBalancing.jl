@@ -1,17 +1,4 @@
-function random_point()
-  (rand(), rand())
-end
-
-function compute_pi(nb_iteration)::Float64
-  count = 0
-  for i in 1:nb_iteration
-    (x, y) = random_point()
-    if x * x + y * y < 1
-      count += 1
-    end
-  end
-  4 * count / nb_iteration
-end
+module LoadBalancing
 
 function threading_run(fun, static)
     ccall(:jl_enter_threaded_region, Cvoid, ())
@@ -134,3 +121,4 @@ macro lbthreads(args...)
     end
 end
 
+end
