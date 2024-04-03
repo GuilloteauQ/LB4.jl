@@ -28,8 +28,9 @@ function threading_run(fun, static)
     end
 end
 
-function get_chunk_dynamic(j::Int64, first_index::Int64, max_len::Int64)::Tuple{Int, Int}
-  (first_index + (j - 1), first_index + (j - 1))
+function get_chunk_dynamic(j::Int64, first_index::Int64, max_len::Int64, block_size::Int64)::Tuple{Int, Int}
+  (first_index + block_size * (j - 1), first_index + j * block_size - 1)
+  #(first_index + (j - 1) , first_index + (j - 1))
 end
 
 function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64, block_size::Int64)::Tuple{Int, Int}
@@ -73,12 +74,12 @@ end
 
 
 
-function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol)
+function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol, min_block_size::Int64)
   p = Threads.threadpoolsize()
   if sched == :static
     ((i::Int64) -> get_chunk_static(i, first_index, max_len, div(max_len, p)), p)
   elseif sched == :dynamic
-    ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len), max_len)
+    ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len, min_block_size), ceil(max_len / min_block_size))
   elseif sched == :gss
     ((i::Int64) -> get_chunk_gss(i, first_index, max_len, p), ceil(log(p / max_len) / log((p-1)/p) + 1))
   elseif sched == :tss
@@ -113,8 +114,13 @@ get_str(li::LogInfo, sched::Symbol) = "$(li.thread_id), $(li.start_iter), $(li.e
 
 
 
-macro lbthreads(args...)
-    sched, loop = args
+macro lbthreads_log(args...)
+    min_block_size = 1
+    if length(args) == 3
+      sched, min_block_size, loop = args
+    else
+      sched, loop = args
+    end
     iterator = loop.args[1]
     body = loop.args[2]
     index_variable = iterator.args[1]
@@ -123,9 +129,10 @@ macro lbthreads(args...)
       local thread_f
       let range = $(esc(range))
         let sched_v = $(esc(sched))
+        min_block_size_v = $(esc(min_block_size))
         lenr = length(range)
         fi = firstindex(range)
-        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v)
+        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v, min_block_size_v)
         queue_index = Threads.Atomic{Int}(1)
 
         function thread_f()
@@ -136,13 +143,10 @@ macro lbthreads(args...)
               break
             end
             start_iter, end_iter = chunk_f(index)
-            #end_iter = min(end_iter, fi + lenr)
             if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
-              #println("oops")
               break
             end
             start_ts = time_ns()
-            #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "], ", fi + lenr)
             for i in start_iter:end_iter
               local $(esc(index_variable)) = @inbounds i
               $(esc(body))
@@ -150,10 +154,53 @@ macro lbthreads(args...)
             end_ts = time_ns()
             push!(tasks_log, LogInfo(start_ts, end_ts, Threads.threadid(), start_iter, end_iter))
           end
-          outfile_name = "/Users/guillo0001/ghq/github.com/GuilloteauQ/LB.jl/lb4jl_thread_$(Threads.threadid()).csv" 
+          outfile_name = "lb4jl_thread_$(Threads.threadid()).csv" 
           open(outfile_name, "a") do file
             for task in tasks_log
               write(file, get_str(task, sched_v))
+            end
+          end
+        end
+      end
+      end
+      threading_run(thread_f, true)
+    end
+end
+
+macro lbthreads(args...)
+    min_block_size = 1
+    if length(args) == 3
+      sched, min_block_size, loop = args
+    else
+      sched, loop = args
+    end
+    iterator = loop.args[1]
+    body = loop.args[2]
+    index_variable = iterator.args[1]
+    range = iterator.args[2]
+    quote
+      local thread_f
+      let range = $(esc(range))
+        let sched_v = $(esc(sched))
+        min_block_size_v = $(esc(min_block_size))
+        lenr = length(range)
+        fi = firstindex(range)
+        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v, min_block_size_v)
+        queue_index = Threads.Atomic{Int}(1)
+
+        function thread_f()
+          while true
+            index = Threads.atomic_add!(queue_index, 1)
+            if index > max_chunks
+              return
+            end
+            start_iter, end_iter = chunk_f(index)
+            if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
+              return
+            end
+            for i in start_iter:end_iter
+              local $(esc(index_variable)) = @inbounds i
+              $(esc(body))
             end
           end
         end
