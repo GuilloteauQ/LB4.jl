@@ -59,6 +59,20 @@ function get_chunk_fac2(j::Int64, first_index::Int64, max_len::Int64, p::Int64):
   (start, start + block_size - 1)
 end
 
+function get_chunk_fiss(j::Int64, first_index::Int64, block_size::Int64)::Tuple{Int, Int}
+  start = first_index + (j - 1) * block_size 
+  (start, start + block_size - 1)
+end
+
+# function get_chunk_viss(j::Int64, first_index::Int64, block_size::Int64, p::Int64)::Tuple{Int, Int}
+#   round = (j - 1) ÷ p
+# 
+#   start = first_index + (j - 1) * block_size 
+#   (start, start + block_size - 1)
+# end
+
+
+
 function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol)
   p = Threads.threadpoolsize()
   if sched == :static
@@ -75,11 +89,29 @@ function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol)
     ((i::Int64) -> get_chunk_tss(i, first_index, max_len, f, l, S, delta), S)
   elseif sched == :fac2
     ((i::Int64) -> get_chunk_fac2(i, first_index, max_len, p), max_len)
+  elseif sched == :fiss
+    B = 1
+    block_size = ceil((2 * max_len * (1 - (B / (2 + B)))) / (p * B * (B - 1)))
+    ((i::Int64) -> get_chunk_fiss(i, first_index, block_size), max_len) # TODO: max_len
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
   end
 end
+
+struct LogInfo
+  start_ts::UInt64
+  end_ts::UInt64
+  thread_id::Int
+  start_iter::Int64
+  end_iter::Int64
+end
+
+Base.show(io::IO, li::LogInfo) = print(io, "$(li.thread_id), $(li.start_iter), $(li.end_iter), $(li.start_ts), $(li.end_ts)")
+
+get_str(li::LogInfo, sched::Symbol) = "$(li.thread_id), $(li.start_iter), $(li.end_iter), $(li.start_ts), $(li.end_ts), $(sched)\n"
+
+
 
 macro lbthreads(args...)
     sched, loop = args
@@ -97,21 +129,31 @@ macro lbthreads(args...)
         queue_index = Threads.Atomic{Int}(1)
 
         function thread_f()
+          tasks_log = LogInfo[]
           while true
             index = Threads.atomic_add!(queue_index, 1)
             if index > max_chunks
-              return
+              break
             end
             start_iter, end_iter = chunk_f(index)
             #end_iter = min(end_iter, fi + lenr)
             if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
               #println("oops")
-              return
+              break
             end
+            start_ts = time_ns()
             #println("Thread id: ", Threads.threadid(), " [", start_iter, ", ", end_iter, "], ", fi + lenr)
             for i in start_iter:end_iter
               local $(esc(index_variable)) = @inbounds i
               $(esc(body))
+            end
+            end_ts = time_ns()
+            push!(tasks_log, LogInfo(start_ts, end_ts, Threads.threadid(), start_iter, end_iter))
+          end
+          outfile_name = "/Users/guillo0001/ghq/github.com/GuilloteauQ/LB.jl/lb4jl_thread_$(Threads.threadid()).csv" 
+          open(outfile_name, "a") do file
+            for task in tasks_log
+              write(file, get_str(task, sched_v))
             end
           end
         end
