@@ -1,20 +1,14 @@
 module LoadBalancing
 
-function threading_run(fun, static)
+function threading_run(fun)
     ccall(:jl_enter_threaded_region, Cvoid, ())
     n = Threads.threadpoolsize()
     tid_offset = Threads.threadpoolsize(:interactive)
     tasks = Vector{Task}(undef, n)
     for i = 1:n
         t = Task(() -> fun()) # pass in tid
-        t.sticky = static
-        if static
-            ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
-        else
-            # TODO: this should be the current pool (except interactive) if there
-            # are ever more than two pools.
-            @assert ccall(:jl_set_task_threadpoolid, Cint, (Any, Int8), t, _sym_to_tpid(:default)) == 1
-        end
+        t.sticky = true
+        ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
         tasks[i] = t
         schedule(t)
     end
@@ -28,72 +22,29 @@ function threading_run(fun, static)
     end
 end
 
-function get_chunk_dynamic(j::Int64, first_index::Int64, max_len::Int64, block_size::Int64)::Tuple{Int, Int}
-  (first_index + block_size * (j - 1), first_index + j * block_size - 1)
-  #(first_index + (j - 1) , first_index + (j - 1))
-end
-
-function get_chunk_static(j::Int64, first_index::Int64, max_len::Int64, block_size::Int64)::Tuple{Int, Int}
-  (first_index + (j - 1) * block_size, first_index + min(max_len, j * block_size - 1))
-end
-
-function get_chunk_gss(j::Int64, first_index::Int64, max_len::Int64, p::Int64)::Tuple{Int, Int}
-  offset = max_len - max_len * ((p-1)/p)^(j-1)
-  k = (max_len / p) * ((p-1)/p)^(j-1)
-  (floor(first_index + offset), floor(first_index + offset + k - 1))
-end
-
-function get_chunk_tss(j::Int64, first_index::Int64, max_len::Int64, f::Int64, l::Int64, S::Int64, delta::Int64)::Tuple{Int, Int}
-  i_start = first_index + floor(((j - 1) * (2 * f - (j - 2) * delta)) / 2)# + 1
-  i_end   = first_index + floor((j * (2 * f - (j - 1) * delta)) / 2)
-
-  (i_start, (i_end - 1 <= max_len) ? i_end - 1 : max_len)
-end
-
-function get_chunk_fac2(j::Int64, first_index::Int64, max_len::Int64, p::Int64)::Tuple{Int, Int}
-  round = (j - 1) ÷ p
-  block_size = ceil(Int64, (0.5)^(round + 1) * max_len / p)
-  start = first_index + sum(p * (ceil(Int64, (0.5)^(i + 1) * max_len / p)) for i in 0:(round - 1); init=0) + ((j - 1) % p) * block_size
-
-  #println("Thread id: ", Threads.threadid(), ", round: ", round, ", block size: ", block_size, ", start: ", start)
-
-  (start, start + block_size - 1)
-end
-
-function get_chunk_fiss(j::Int64, first_index::Int64, block_size::Int64)::Tuple{Int, Int}
-  start = first_index + (j - 1) * block_size 
-  (start, start + block_size - 1)
-end
-
-# function get_chunk_viss(j::Int64, first_index::Int64, block_size::Int64, p::Int64)::Tuple{Int, Int}
-#   round = (j - 1) ÷ p
-# 
-#   start = first_index + (j - 1) * block_size 
-#   (start, start + block_size - 1)
-# end
-
-
-
-function get_chunk(first_index::Int64, max_len::Int64, sched::Symbol, min_block_size::Int64)
+function get_chunk(first_index::Int64, n::Int64, sched::Symbol, min_block_size::Int64)
   p = Threads.threadpoolsize()
   if sched == :static
-    ((i::Int64) -> get_chunk_static(i, first_index, max_len, div(max_len, p)), p)
+    (i::Int64) -> ceil(Int64, n / p)
   elseif sched == :dynamic
-    ((i::Int64) -> get_chunk_dynamic(i, first_index, max_len, min_block_size), ceil(max_len / min_block_size))
+    (i::Int64) -> 1
   elseif sched == :gss
-    ((i::Int64) -> get_chunk_gss(i, first_index, max_len, p), ceil(log(p / max_len) / log((p-1)/p) + 1))
-  elseif sched == :tss
-    f = ceil(Int64, max_len / (2 * Threads.threadpoolsize()))
-    l = 1
-    S = ceil(Int64, 2 * max_len / (f + l))
-    delta = floor(Int64, (f - l) / (S - 1))
-    ((i::Int64) -> get_chunk_tss(i, first_index, max_len, f, l, S, delta), S)
+    (i::Int64) -> ceil(Int64, (n / p) * ((p - 1) / p)^i)
   elseif sched == :fac2
-    ((i::Int64) -> get_chunk_fac2(i, first_index, max_len, p), max_len)
+    (i::Int64) -> ceil(Int64, (n / (p * 2^(floor(Int64, i/p) + 1))))
+  elseif sched == :tss
+    k_0 = ceil(Int64, n / (2 * p))
+    k_s_1 = 1
+    s = ceil(Int64, 2 * n / (k_0 + k_s_1))
+    (i::Int64) -> (k_0 - i * floor(Int64, (k_0 - k_s_1) / (s - 1)))
   elseif sched == :fiss
-    B = 1
-    block_size = ceil((2 * max_len * (1 - (B / (2 + B)))) / (p * B * (B - 1)))
-    ((i::Int64) -> get_chunk_fiss(i, first_index, block_size), max_len) # TODO: max_len
+    b = ceil(Int64, log2(n))
+    k_0 = ceil(Int64, n / ((2 + b) * p))
+    (i::Int64) -> (k_0 + i * ceil(Int64, (2 * n * (1 - (b / (2 + b)))) / (p * b * (b - 1))))
+  elseif sched == :viss
+    b = ceil(Int64, log2(n))
+    k_0 = ceil(Int64, n / ((2 + b) * p))
+    (i::Int64) -> k_0 * ceil(Int64, (1 - (1/2)^(i % p)) / (1/2))
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
@@ -111,8 +62,6 @@ end
 Base.show(io::IO, li::LogInfo) = print(io, "$(li.thread_id), $(li.start_iter), $(li.end_iter), $(li.start_ts), $(li.end_ts)")
 
 get_str(li::LogInfo, sched::Symbol) = "$(li.thread_id), $(li.start_iter), $(li.end_iter), $(li.start_ts), $(li.end_ts), $(sched)\n"
-
-
 
 macro lbthreads_log(args...)
     min_block_size = 1
@@ -132,19 +81,24 @@ macro lbthreads_log(args...)
         min_block_size_v = $(esc(min_block_size))
         lenr = length(range)
         fi = firstindex(range)
-        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v, min_block_size_v)
-        queue_index = Threads.Atomic{Int}(1)
+        chunk_f = get_chunk(fi, lenr, sched_v, min_block_size_v)
+        queue_index = Threads.Atomic{Int}(0)
+        start = Threads.Atomic{Int}(fi)
 
         function thread_f()
           tasks_log = LogInfo[]
           while true
             index = Threads.atomic_add!(queue_index, 1)
-            if index > max_chunks
+            block = chunk_f(index)
+            start_iter = Threads.atomic_add!(start, block + 1)
+            end_iter = start_iter + block
+
+            if start_iter >= fi + lenr ||  end_iter < start_iter
+              #println("bogus: ($(start_iter), $(end_iter))")
               break
             end
-            start_iter, end_iter = chunk_f(index)
-            if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
-              break
+            if end_iter >= fi + lenr
+              end_iter = lenr
             end
             start_ts = time_ns()
             for i in start_iter:end_iter
@@ -163,7 +117,7 @@ macro lbthreads_log(args...)
         end
       end
       end
-      threading_run(thread_f, true)
+      threading_run(thread_f)
     end
 end
 
@@ -185,18 +139,22 @@ macro lbthreads(args...)
         min_block_size_v = $(esc(min_block_size))
         lenr = length(range)
         fi = firstindex(range)
-        chunk_f, max_chunks = get_chunk(fi, lenr, sched_v, min_block_size_v)
-        queue_index = Threads.Atomic{Int}(1)
+        chunk_f = get_chunk(fi, lenr, sched_v, min_block_size_v)
+        queue_index = Threads.Atomic{Int}(0)
+        start = Threads.Atomic{Int}(fi)
 
         function thread_f()
           while true
             index = Threads.atomic_add!(queue_index, 1)
-            if index > max_chunks
-              return
+            block = chunk_f(index)
+            start_iter = Threads.atomic_add!(start, block + 1)
+            end_iter = start_iter + block
+            if start_iter >= fi + lenr ||  end_iter < start_iter
+              #println("bogus")
+              break
             end
-            start_iter, end_iter = chunk_f(index)
-            if start_iter >= fi + lenr || end_iter >= fi + lenr || end_iter < start_iter
-              return
+            if end_iter >= fi + lenr
+              end_iter = lenr
             end
             for i in start_iter:end_iter
               local $(esc(index_variable)) = @inbounds i
@@ -206,7 +164,7 @@ macro lbthreads(args...)
         end
       end
       end
-      threading_run(thread_f, true)
+      threading_run(thread_f)
     end
 end
 
