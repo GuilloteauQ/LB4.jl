@@ -1,4 +1,4 @@
-module LoadBalancing
+module LB4
 
 function threading_run(fun)
     ccall(:jl_enter_threaded_region, Cvoid, ())
