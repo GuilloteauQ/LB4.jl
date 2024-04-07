@@ -22,8 +22,9 @@ function threading_run(fun)
     end
 end
 
-function get_chunk(first_index::Int64, n::Int64, sched::Symbol, min_block_size::Int64)
-  p = Threads.threadpoolsize()
+# function get_chunk(first_index::Int64, n::Int64, sched::Symbol, min_block_size::Int64)
+function get_chunk(sched::Symbol, n::Int64, p::Int64)
+  #p = Threads.threadpoolsize()
   if sched == :static
     (i::Int64) -> ceil(Int64, n / p)
   elseif sched == :dynamic
@@ -31,7 +32,7 @@ function get_chunk(first_index::Int64, n::Int64, sched::Symbol, min_block_size::
   elseif sched == :gss
     (i::Int64) -> ceil(Int64, (n / p) * ((p - 1) / p)^i)
   elseif sched == :fac2
-    (i::Int64) -> ceil(Int64, (n / (p * 2^(floor(Int64, i/p) + 1))))
+    (i::Int64) -> ceil(Int64, ((n / p) * 0.5^(floor(Int64, i/p) + 1)))
   elseif sched == :tss
     k_0 = ceil(Int64, n / (2 * p))
     k_s_1 = 1
@@ -122,9 +123,9 @@ macro lbthreads_log(args...)
 end
 
 macro lbthreads(args...)
-    min_block_size = 1
+    prefix_log = nothing
     if length(args) == 3
-      sched, min_block_size, loop = args
+      sched, prefix_log, loop = args
     else
       sched, loop = args
     end
@@ -135,12 +136,14 @@ macro lbthreads(args...)
     quote
       local thread_f
       let range = $(esc(range))
-        let sched_v = $(esc(sched))
-        min_block_size_v = $(esc(min_block_size))
         lenr = length(range)
-        fi = firstindex(range)
-        chunk_f = get_chunk(fi, lenr, sched_v, min_block_size_v)
+        let sched_v = $(esc(sched))
+
+        p = Threads.threadpoolsize()
+        chunk_f = typeof(sched_v) == Symbol ? get_chunk(sched_v, lenr, p) : eval(:($sched_v($lenr, $p)))
+
         queue_index = Threads.Atomic{Int}(0)
+        fi = firstindex(range)
         start = Threads.Atomic{Int}(fi)
 
         function thread_f()
@@ -161,6 +164,7 @@ macro lbthreads(args...)
               $(esc(body))
             end
           end
+        #end
         end
       end
       end
