@@ -1,4 +1,4 @@
-include("../src/LoadBalancing.jl")
+include("../src/LB4.jl")
 
 
 function prefix_sum(scheme::Symbol)

@@ -1,4 +1,4 @@
-include("../src/LoadBalancing.jl")
+include("../src/LB4.jl")
 
 function hash(s::String)::Int64
   sum(collect(s) .|> x -> Int(x))

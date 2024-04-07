@@ -1,4 +1,4 @@
-include("../src/LoadBalancing.jl")
+include("../src/LB4.jl")
 
 function diverges(c::Complex, nb_iterations::Int64, epsilon::Float64)::Bool
   z = 0 + im * 0

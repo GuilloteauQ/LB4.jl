@@ -1,4 +1,4 @@
-include("../src/LoadBalancing.jl")
+include("../src/LB4.jl")
 
 function par_compute_pi(nb_iteration)::Float64
   counts = Array{Bool}(undef, nb_iteration)

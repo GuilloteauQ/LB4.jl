@@ -1,4 +1,4 @@
-include("../src/LoadBalancing.jl")
+include("../src/LB4.jl")
 using BenchmarkTools
 
 function random_point()
