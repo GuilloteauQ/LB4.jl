@@ -46,6 +46,11 @@ function get_chunk(sched::Symbol, n::Int64, p::Int64)
     b = ceil(Int64, log2(n))
     k_0 = ceil(Int64, n / ((2 + b) * p))
     (i::Int64) -> k_0 * ceil(Int64, (1 - (1/2)^(i % p)) / (1/2))
+  elseif sched == :rnd
+    k_min = ceil(Int64, n / (100 * p))
+    k_max = ceil(Int64, n / (2 * p))
+    (i::Int64) -> rand((k_min:k_max))
+
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
