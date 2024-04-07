@@ -22,9 +22,7 @@ function threading_run(fun)
     end
 end
 
-# function get_chunk(first_index::Int64, n::Int64, sched::Symbol, min_block_size::Int64)
 function get_chunk(sched::Symbol, n::Int64, p::Int64)
-  #p = Threads.threadpoolsize()
   if sched == :static
     (i::Int64) -> ceil(Int64, n / p)
   elseif sched == :dynamic
@@ -50,7 +48,6 @@ function get_chunk(sched::Symbol, n::Int64, p::Int64)
     k_min = ceil(Int64, n / (100 * p))
     k_max = ceil(Int64, n / (2 * p))
     (i::Int64) -> rand((k_min:k_max))
-
   else
     println("Unknown sched: ", sched)
     throw("Unknown `sched`")
