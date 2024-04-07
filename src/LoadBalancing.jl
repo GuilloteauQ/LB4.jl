@@ -72,9 +72,9 @@ Base.show(io::IO, li::LogInfo) = print(io, "$(li.thread_id), $(li.start_iter), $
 get_str(li::LogInfo, sched::Symbol) = "$(li.thread_id), $(li.start_iter), $(li.end_iter), $(li.start_ts), $(li.end_ts), $(sched)\n"
 
 macro lbthreads_log(args...)
-    min_block_size = 1
+    log_prefix = "lb4jl_thread_" 
     if length(args) == 3
-      sched, min_block_size, loop = args
+      sched, log_prefix, loop = args
     else
       sched, loop = args
     end
@@ -85,12 +85,15 @@ macro lbthreads_log(args...)
     quote
       local thread_f
       let range = $(esc(range))
-        let sched_v = $(esc(sched))
-        min_block_size_v = $(esc(min_block_size))
         lenr = length(range)
-        fi = firstindex(range)
-        chunk_f = get_chunk(fi, lenr, sched_v, min_block_size_v)
+        let sched_v = $(esc(sched))
+        let log_prefix_v = $(esc(log_prefix))
+
+        p = Threads.threadpoolsize()
+        chunk_f = typeof(sched_v) == Symbol ? get_chunk(sched_v, lenr, p) : eval(:($sched_v($lenr, $p)))
+
         queue_index = Threads.Atomic{Int}(0)
+        fi = firstindex(range)
         start = Threads.Atomic{Int}(fi)
 
         function thread_f()
@@ -116,8 +119,8 @@ macro lbthreads_log(args...)
             end_ts = time_ns()
             push!(tasks_log, LogInfo(start_ts, end_ts, Threads.threadid(), start_iter, end_iter))
           end
-          outfile_name = "lb4jl_thread_$(Threads.threadid()).csv" 
-          open(outfile_name, "a") do file
+          outfile_name = "$(log_prefix_v)$(Threads.threadid()).csv" 
+          open(outfile_name, "w") do file
             for task in tasks_log
               write(file, get_str(task, sched_v))
             end
@@ -125,17 +128,13 @@ macro lbthreads_log(args...)
         end
       end
       end
+      end
       threading_run(thread_f)
     end
 end
 
 macro lbthreads(args...)
-    prefix_log = nothing
-    if length(args) == 3
-      sched, prefix_log, loop = args
-    else
-      sched, loop = args
-    end
+    sched, loop = args
     iterator = loop.args[1]
     body = loop.args[2]
     index_variable = iterator.args[1]
@@ -171,7 +170,6 @@ macro lbthreads(args...)
               $(esc(body))
             end
           end
-        #end
         end
       end
       end
