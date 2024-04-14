@@ -35,11 +35,13 @@ function get_chunk(sched::Symbol, n::Int64, p::Int64)
     k_0 = ceil(Int64, n / (2 * p))
     k_s_1 = 1
     s = ceil(Int64, 2 * n / (k_0 + k_s_1))
-    (i::Int64) -> (k_0 - i * floor(Int64, (k_0 - k_s_1) / (s - 1)))
+    k = floor(Int64, (k_0 - k_s_1) / (s - 1))
+    (i::Int64) -> (k_0 - i * k)
   elseif sched == :fiss
     b = ceil(Int64, log2(n))
     k_0 = ceil(Int64, n / ((2 + b) * p))
-    (i::Int64) -> (k_0 + i * ceil(Int64, (2 * n * (1 - (b / (2 + b)))) / (p * b * (b - 1))))
+    k = ceil(Int64, (2 * n * (1 - (b / (2 + b)))) / (p * b * (b - 1)))
+    (i::Int64) -> (k_0 + i * k) 
   elseif sched == :viss
     b = ceil(Int64, log2(n))
     k_0 = ceil(Int64, n / ((2 + b) * p))
