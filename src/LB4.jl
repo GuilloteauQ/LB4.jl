@@ -5,21 +5,31 @@ function threading_run(fun)
     n = Threads.threadpoolsize()
     tid_offset = Threads.threadpoolsize(:interactive)
     tasks = Vector{Task}(undef, n)
+    times = Vector{UInt64}(undef, n)
     for i = 1:n
         t = Task(() -> fun()) # pass in tid
         t.sticky = true
         ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
         tasks[i] = t
         schedule(t)
+        times[i] = time_ns()
     end
     for i = 1:n
         Base._wait(tasks[i])
+        times[i] = fetch(tasks[i]) - times[i]
     end
     ccall(:jl_exit_threaded_region, Cvoid, ())
     failed_tasks = filter!(istaskfailed, tasks)
     if !isempty(failed_tasks)
         throw(CompositeException(map(TaskFailedException, failed_tasks)))
     end
+    times_secondes = times .* 1e-9
+    mean_time = sum(times_secondes) / n
+    sd_time = sqrt(sum(map(x -> x^2, times_secondes .- mean_time)) / n)
+    cov = sd_time / mean_time
+    max_time = maximum(times_secondes) 
+    percentage_imbalance = (n / (n-1)) * ((max_time - mean_time) / max_time) * 100
+    "mean: $(mean_time), sd: $(sd_time), c.o.v.: $(cov), p.i.: $(percentage_imbalance)%"
 end
 
 function get_chunk(sched::Symbol, n::Int64, p::Int64)
@@ -127,6 +137,7 @@ macro lbthreads_log(args...)
               write(file, get_str(task, sched_v))
             end
           end
+          time_ns()
         end
       end
       end
@@ -172,9 +183,10 @@ macro lbthreads(args...)
               $(esc(body))
             end
           end
+          time_ns()
         end
       end
-      end
+    end
       threading_run(thread_f)
     end
 end
