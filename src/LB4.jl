@@ -1,5 +1,21 @@
 module LB4
 
+struct LoopInfo
+  times::Vector{Float64}
+  nb_threads::UInt64
+end
+
+function Base.show(io::IO, li::LoopInfo)
+  digits = 3
+  mean_time = sum(li.times) / li.nb_threads
+  sd_time = sqrt(sum(map(x -> x^2, li.times .- mean_time)) / (li.nb_threads - 1))
+  cov = round(sd_time / mean_time, digits=digits)
+  max_time = maximum(li.times) 
+  bound = round(1.96 * sd_time / sqrt(li.nb_threads), digits=digits)
+  percentage_imbalance = round((li.nb_threads / (li.nb_threads-1)) * ((max_time - mean_time) / max_time) * 100, digits=digits)
+  print(io, "$(round(mean_time, digits=digits))s ± $(bound) (95% CI), c.o.v.: $(cov), p.i.: $(percentage_imbalance)%")
+end
+
 function threading_run(fun)
     ccall(:jl_enter_threaded_region, Cvoid, ())
     n = Threads.threadpoolsize()
@@ -23,14 +39,7 @@ function threading_run(fun)
     if !isempty(failed_tasks)
         throw(CompositeException(map(TaskFailedException, failed_tasks)))
     end
-    digits = 3
-    mean_time = sum(times) / n
-    sd_time = sqrt(sum(map(x -> x^2, times .- mean_time)) / (n - 1))
-    cov = round(sd_time / mean_time, digits=digits)
-    max_time = maximum(times) 
-    bound = round(1.96 * sd_time / sqrt(n), digits=digits)
-    percentage_imbalance = round((n / (n-1)) * ((max_time - mean_time) / max_time) * 100, digits=digits)
-    "$(round(mean_time, digits=digits))s ± $(bound) (95% CI), c.o.v.: $(cov), p.i.: $(percentage_imbalance)%"
+    LoopInfo(times, n)
 end
 
 function get_chunk(sched::Symbol, n::Int64, p::Int64)
