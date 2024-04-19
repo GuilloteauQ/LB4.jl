@@ -5,31 +5,32 @@ function threading_run(fun)
     n = Threads.threadpoolsize()
     tid_offset = Threads.threadpoolsize(:interactive)
     tasks = Vector{Task}(undef, n)
-    times = Vector{UInt64}(undef, n)
+    times = Vector{Float64}(undef, n)
+    start_time = time_ns()
     for i = 1:n
         t = Task(() -> fun()) # pass in tid
         t.sticky = true
         ccall(:jl_set_task_tid, Cint, (Any, Cint), t, tid_offset + i-1)
         tasks[i] = t
         schedule(t)
-        times[i] = time_ns()
     end
     for i = 1:n
         Base._wait(tasks[i])
-        times[i] = fetch(tasks[i]) - times[i]
+        times[i] = (fetch(tasks[i]) - start_time) * 1e-9
     end
     ccall(:jl_exit_threaded_region, Cvoid, ())
     failed_tasks = filter!(istaskfailed, tasks)
     if !isempty(failed_tasks)
         throw(CompositeException(map(TaskFailedException, failed_tasks)))
     end
-    times_secondes = times .* 1e-9
-    mean_time = sum(times_secondes) / n
-    sd_time = sqrt(sum(map(x -> x^2, times_secondes .- mean_time)) / n)
-    cov = sd_time / mean_time
-    max_time = maximum(times_secondes) 
-    percentage_imbalance = (n / (n-1)) * ((max_time - mean_time) / max_time) * 100
-    "mean: $(mean_time), sd: $(sd_time), c.o.v.: $(cov), p.i.: $(percentage_imbalance)%"
+    digits = 3
+    mean_time = sum(times) / n
+    sd_time = sqrt(sum(map(x -> x^2, times .- mean_time)) / (n - 1))
+    cov = round(sd_time / mean_time, digits=digits)
+    max_time = maximum(times) 
+    bound = round(1.96 * sd_time / sqrt(n), digits=digits)
+    percentage_imbalance = round((n / (n-1)) * ((max_time - mean_time) / max_time) * 100, digits=digits)
+    "$(round(mean_time, digits=digits))s ± $(bound) (95% CI), c.o.v.: $(cov), p.i.: $(percentage_imbalance)%"
 end
 
 function get_chunk(sched::Symbol, n::Int64, p::Int64)
