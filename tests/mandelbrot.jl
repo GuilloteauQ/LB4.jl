@@ -37,7 +37,7 @@ function mandelbrot_par(scheme::Symbol)
   xmax =  4.0
   ymin = -1.0
   ymax =  1.0
-  delta = 0.001
+  delta = 0.01
 
 
   nb_rows = floor(Int64, (ymax - ymin) / delta)
@@ -47,18 +47,19 @@ function mandelbrot_par(scheme::Symbol)
   data = Matrix{Bool}(undef, nb_rows, nb_cols)
   total_iters = nb_cols * nb_rows
 
-  @LoadBalancing.lbthreads scheme for k in 0:(nb_cols * nb_rows - 2)
+  plop = @LB4.lbthreads scheme for k in 0:(nb_cols * nb_rows - 2)
     y = div(k, nb_cols) 
     x = (k) % nb_cols
     c = ((xmax - xmin) * x / nb_cols + xmin) + im * ((ymax - ymin) * y / nb_rows + ymin)
     data[y + 1, x + 1] = diverges(c, 10000, 2.0)
   end
+  println(plop)
   data
 end
 
 println("Mandelbrot --------------------")
 # schemes = [ :static, :gss, :tss, :dynamic, :fac2 ]
-schemes = [ :static ]
+schemes = [ :fac2 ]
 for scheme in schemes
   print(scheme)
   @time mandelbrot_par(scheme)
